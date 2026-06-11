@@ -52,6 +52,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Foundation.Notification) {
         MCPLocalServer.shared.start()
         NotificationManager.shared.configure()
+        // Background services (meeting detection, record-now observer, resuming
+        // calendar polling) must come up per process launch, not on main-window
+        // appearance — a menu-bar app can be relaunched windowless via state
+        // restoration, in which case the window `.task` never fires.
+        Task { @MainActor in AppState.shared?.startBackgroundServices() }
+    }
+
+    func applicationDidBecomeActive(_ notification: Foundation.Notification) {
+        // The app is frontmost here — the only reliable moment to present the
+        // calendar TCC prompt. `start()` is guarded so this runs exactly once.
+        CalendarMonitor.shared.start()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -44,13 +44,16 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// Fire an immediate banner reminding the user a meeting is starting.
-    func notifyMeetingStarting(title: String, body: String, meetingURL: String?) {
+    func notifyMeetingStarting(title: String, body: String, meetingURL: String?, attendees: [String] = []) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
         content.categoryIdentifier = categoryID
-        if let meetingURL { content.userInfo = ["url": meetingURL] }
+        var info: [String: Any] = [:]
+        if let meetingURL { info["url"] = meetingURL }
+        if !attendees.isEmpty { info["attendees"] = attendees }
+        if !info.isEmpty { content.userInfo = info }
 
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -77,17 +80,22 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        let url = response.notification.request.content.userInfo["url"] as? String
+        let info = response.notification.request.content.userInfo
+        let url = info["url"] as? String
+        let attendees = info["attendees"] as? [String] ?? []
         let isRecordTap = response.actionIdentifier == recordActionID
             || response.actionIdentifier == UNNotificationDefaultActionIdentifier
 
         if isRecordTap {
             DispatchQueue.main.async {
                 NSApp.activate(ignoringOtherApps: true)
+                var note: [String: Any] = [:]
+                if let url { note["url"] = url }
+                if !attendees.isEmpty { note["attendees"] = attendees }
                 NotificationCenter.default.post(
                     name: Self.startRecordingNote,
                     object: nil,
-                    userInfo: url.map { ["url": $0] }
+                    userInfo: note.isEmpty ? nil : note
                 )
             }
         }

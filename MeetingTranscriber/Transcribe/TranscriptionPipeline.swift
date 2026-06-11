@@ -112,7 +112,8 @@ final class TranscriptionPipeline {
             sourceKind: sourceKind,
             speakers: merged.speakers,
             segments: merged.segments,
-            audioFileName: voiceURL.lastPathComponent
+            audioFileName: voiceURL.lastPathComponent,
+            attendees: meeting?.attendees
         )
     }
 

@@ -168,11 +168,34 @@ struct TranscriptDetailView: View {
 
     @ViewBuilder
     private func renamePopover(for sp: SpeakerLabel) -> some View {
-        VStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
             TextField("Name", text: $newSpeakerNameDraft)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 220)
                 .onSubmit { commitSpeakerRename(id: sp.id) }
+
+            let candidates = attendeeCandidates
+            if !candidates.isEmpty {
+                Text("From the calendar")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(candidates, id: \.self) { name in
+                        Button {
+                            newSpeakerNameDraft = name
+                            commitSpeakerRename(id: sp.id)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "person.crop.circle")
+                                    .foregroundStyle(.secondary)
+                                Text(name)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
             HStack {
                 Button("Cancel") { renamingSpeakerID = nil }
                 Spacer()
@@ -181,6 +204,12 @@ struct TranscriptDetailView: View {
             }
         }
         .padding(12)
+    }
+
+    /// Attendee names captured from the calendar for this transcript, offered
+    /// as one-tap rename suggestions.
+    private var attendeeCandidates: [String] {
+        appState.transcripts.first(where: { $0.id == documentID })?.attendees ?? []
     }
 
     private func commitSpeakerRename(id: Int) {

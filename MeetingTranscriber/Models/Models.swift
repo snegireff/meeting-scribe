@@ -57,6 +57,10 @@ struct DetectedMeeting: Equatable, Hashable, Identifiable {
     let platform: String
     let url: String
     let detectedAt: Date
+    /// Display names of the calendar event's attendees (organizer first), used
+    /// as candidate names when labelling speakers. Empty for browser-detected
+    /// meetings or events without an attendee list.
+    var attendees: [String] = []
 
     static func == (lhs: DetectedMeeting, rhs: DetectedMeeting) -> Bool {
         lhs.url == rhs.url
@@ -106,6 +110,10 @@ struct TranscriptDocument: Codable, Identifiable, Hashable {
     var speakers: [SpeakerLabel]
     var segments: [TranscriptSegment]
     let audioFileName: String?    // basename of wav in the same dir
+    /// Calendar attendee names captured when recording started — candidate
+    /// names for the speakers. Optional so transcripts saved before this field
+    /// existed still decode.
+    var attendees: [String]? = nil
 
     // Summarization (optional — only set once the user runs one).
     var summary: String?

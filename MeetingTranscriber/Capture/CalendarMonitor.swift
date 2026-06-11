@@ -1,5 +1,6 @@
 import Foundation
 import EventKit
+import AppKit
 
 /// Watches the user's calendar and fires an OS notification when a meeting
 /// that carries a video-conference link (Meet / Zoom / Teams / Whereby / …) is
@@ -13,6 +14,7 @@ final class CalendarMonitor {
     private let store = EKEventStore()
     private var timer: Timer?
     private var notifiedEventIDs = Set<String>()
+    private var didStart = false
 
     /// Hosts that mark an event as a video meeting worth recording.
     private let meetingHosts = [
@@ -21,16 +23,33 @@ final class CalendarMonitor {
         "around.co", "webex.com", "meet.around.co"
     ]
 
-    /// Request calendar access, then poll on a timer.
+    /// Begin polling only if calendar access was already granted. Safe to call
+    /// at process launch (no window / not frontmost) — it never shows a prompt,
+    /// so a windowless relaunch resumes reminders without a doomed TCC request.
+    func resumeIfAuthorized() {
+        guard !didStart else { return }
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return }
+        didStart = true
+        beginPolling()
+    }
+
+    /// Request calendar access (showing the one-time TCC prompt when needed),
+    /// then poll on a timer. Must be called while the app is active / frontmost
+    /// — i.e. from the main window's task — or macOS silently refuses to present
+    /// the prompt and returns notDetermined.
     func start() {
+        guard !didStart else { return }
+        didStart = true
+
+        // Activate the app so TCC has a foreground session to attach the prompt
+        // to (LaunchServices may have opened us behind another app).
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
         let onGrant: (Bool, Error?) -> Void = { [weak self] granted, error in
             if let error {
-                NSLog("[CalendarMonitor] access error: \(error.localizedDescription)")
+                NSLog("[CalendarMonitor] calendar access error: \(error.localizedDescription)")
             }
-            guard granted else {
-                NSLog("[CalendarMonitor] calendar access denied")
-                return
-            }
+            guard granted else { return }
             DispatchQueue.main.async { self?.beginPolling() }
         }
 
@@ -81,12 +100,71 @@ final class CalendarMonitor {
             NotificationManager.shared.notifyMeetingStarting(
                 title: "🎙 Кол починається",
                 body: "«\(title)» — натисни «Почати запис»",
-                meetingURL: link
+                meetingURL: link,
+                attendees: attendeeNames(of: event)
             )
         }
 
         // Keep the dedupe set from growing unbounded across a long session.
         if notifiedEventIDs.count > 500 { notifiedEventIDs.removeAll() }
+    }
+
+    /// The video meeting happening right now (started in the last 30 min and
+    /// not yet ended), with its attendees — used to tag a manually-started
+    /// recording with candidate speaker names. Returns nil without calendar
+    /// access or when no live video meeting is found.
+    func currentMeeting() -> DetectedMeeting? {
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return nil }
+        let now = Date()
+        let calendars = store.calendars(for: .event)
+        guard !calendars.isEmpty else { return nil }
+        let predicate = store.predicateForEvents(
+            withStart: now.addingTimeInterval(-30 * 60),
+            end: now.addingTimeInterval(5 * 60),
+            calendars: calendars
+        )
+        for event in store.events(matching: predicate) {
+            let start: Date = event.startDate
+            let end: Date = event.endDate
+            guard start <= now.addingTimeInterval(5 * 60), end >= now else { continue }
+            guard let link = meetingLink(in: event) else { continue }
+            return DetectedMeeting(
+                title: event.title ?? "Зустріч",
+                platform: "Calendar",
+                url: link,
+                detectedAt: now,
+                attendees: attendeeNames(of: event)
+            )
+        }
+        return nil
+    }
+
+    /// Organizer + attendee display names (deduped, organizer first).
+    private func attendeeNames(of event: EKEvent) -> [String] {
+        var names: [String] = []
+        if let organizer = event.organizer, let n = participantName(organizer) {
+            names.append(n)
+        }
+        for participant in event.attendees ?? [] {
+            guard let n = participantName(participant), !names.contains(n) else { continue }
+            names.append(n)
+        }
+        return names
+    }
+
+    /// A participant's display name, falling back to the email local-part from
+    /// its `mailto:` URL when no name is provided.
+    private func participantName(_ participant: EKParticipant) -> String? {
+        if let name = participant.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty, name.lowercased() != "unknown" {
+            return name
+        }
+        let s = participant.url.absoluteString
+        if let range = s.range(of: "mailto:", options: [.caseInsensitive]) {
+            let email = String(s[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+            return email.isEmpty ? nil : email
+        }
+        return nil
     }
 
     /// Returns the first video-meeting URL found in the event's url/location/notes.

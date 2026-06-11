@@ -9,6 +9,12 @@ enum TranscriptFormatter {
             speakersYaml += "  - { id: \(s.id), name: \"\(escape(s.name))\" }\n"
         }
 
+        var attendeesYaml = ""
+        if let attendees = doc.attendees, !attendees.isEmpty {
+            let list = attendees.map { "\"\(escape($0))\"" }.joined(separator: ", ")
+            attendeesYaml = "attendees: [\(list)]\n"
+        }
+
         var out = """
         ---
         id: \(doc.id)
@@ -18,7 +24,7 @@ enum TranscriptFormatter {
         language: \(doc.language.rawValue)
         model: \(doc.modelShortName)
         source_kind: \(doc.sourceKind.rawValue)
-        \(doc.sourceURL.map { "source: \"\(escape($0))\"\n" } ?? "")speakers:
+        \(doc.sourceURL.map { "source: \"\(escape($0))\"\n" } ?? "")\(attendeesYaml)speakers:
         \(speakersYaml)---
 
         # \(doc.title)

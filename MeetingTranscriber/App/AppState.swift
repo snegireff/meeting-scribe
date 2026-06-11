@@ -6,6 +6,16 @@ import AppKit
 @MainActor
 @Observable
 final class AppState {
+
+    /// Weak handle so the AppDelegate can start process-level background
+    /// services at launch, independent of whether the main window appears
+    /// (a menu-bar app can be relaunched windowless via state restoration).
+    @ObservationIgnored static weak var shared: AppState?
+
+    init() {
+        Self.shared = self
+    }
+
     // MARK: – Settings
     var selectedModel: WhisperModel = WhisperModel.preferred(for: .ukrainian)
     var defaultLanguage: TranscriptionLanguage = .ukrainian {
@@ -240,6 +250,7 @@ final class AppState {
         cancelIdleUnload()
 
         let language = doc.language
+        let candidateNames = doc.attendees ?? []
         let resolvedModel: LanguageModel = model
             ?? doc.summaryModelOverride
             ?? defaultModelEnglish
@@ -297,7 +308,8 @@ final class AppState {
                 if !remoteToInfer.isEmpty {
                     let identifyPrompt = SummaryPrompts.identifyInstruction(
                         for: language,
-                        labels: remoteToInfer.map(\.name)
+                        labels: remoteToInfer.map(\.name),
+                        candidates: candidateNames
                     ) + "\n\nTranscript:\n" + initialFeed
                     let identifyStream = try await summaryEngine.stream(
                         prompt: identifyPrompt,
@@ -585,16 +597,28 @@ final class AppState {
     private var detector: MeetingDetector?
     private var recorder: RecordingCoordinator?
     private var elapsedTimer: Timer?
-    private var didBootstrap = false
+    private var didStartServices = false
 
     // MARK: – Bootstrap
+    /// Window-level startup: load transcripts for the UI and make sure the
+    /// process-level services are up (in case the window appeared before
+    /// `applicationDidFinishLaunching` wired them).
     func bootstrap() async {
-        guard !didBootstrap else { return }
-        didBootstrap = true
+        startBackgroundServices()
         await loadTranscripts()
+    }
+
+    /// Process-level services that must run regardless of whether the main
+    /// window is visible: browser meeting detection, the "record now"
+    /// notification observer, and resuming calendar polling when access was
+    /// already granted. Idempotent. Does NOT request calendar access — that
+    /// needs an active window (see `bootstrap`).
+    func startBackgroundServices() {
+        guard !didStartServices else { return }
+        didStartServices = true
         startMeetingDetection()
         observeStartRecordingNotifications()
-        CalendarMonitor.shared.start()
+        CalendarMonitor.shared.resumeIfAuthorized()
     }
 
     func loadTranscripts() async {
@@ -638,11 +662,13 @@ final class AppState {
             queue: .main
         ) { [weak self] note in
             let url = note.userInfo?["url"] as? String
+            let attendees = note.userInfo?["attendees"] as? [String] ?? []
             Task { @MainActor in
                 guard let self else { return }
                 if self.recordingState.isBusy { return }
                 let meeting = url.map {
-                    DetectedMeeting(title: "Calendar meeting", platform: "Calendar", url: $0, detectedAt: Date())
+                    DetectedMeeting(title: "Calendar meeting", platform: "Calendar",
+                                    url: $0, detectedAt: Date(), attendees: attendees)
                 }
                 await self.startRecording(language: self.defaultLanguage, meeting: meeting)
             }
@@ -659,6 +685,9 @@ final class AppState {
     // MARK: – Recording lifecycle
     func startRecording(language: TranscriptionLanguage, meeting: DetectedMeeting?) async {
         guard case .idle = recordingState else { return }
+        // Manual recordings carry no meeting — if a calendar event is happening
+        // right now, attach it so we still get attendee names for the speakers.
+        let meeting = meeting ?? CalendarMonitor.shared.currentMeeting()
         recordingState = .preparing
         currentMicRMS = 0
         currentSystemRMS = 0

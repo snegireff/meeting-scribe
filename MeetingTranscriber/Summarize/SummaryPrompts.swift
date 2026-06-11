@@ -15,7 +15,8 @@ enum SummaryPrompts {
     /// "Remote 1", …) to real names mentioned in the conversation. Strict
     /// output format so `parseInferredNames` can read it back deterministically.
     static func identifyInstruction(for language: TranscriptionLanguage,
-                                    labels: [String]) -> String {
+                                    labels: [String],
+                                    candidates: [String] = []) -> String {
         let intro: String
         let unknown: String
         switch language {
@@ -28,7 +29,19 @@ enum SummaryPrompts {
         }
         let format = "<label>: <name or unknown>"
         let bullets = labels.map { "- \($0)" }.joined(separator: "\n")
-        return "\(intro)\n\(format)\n\(unknown)\n\nLabels to identify:\n\(bullets)"
+
+        var candidateBlock = ""
+        if !candidates.isEmpty {
+            let list = candidates.joined(separator: ", ")
+            switch language {
+            case .english:
+                candidateBlock = "\n\nThe meeting's known attendees are: \(list). The speakers are most likely among these people — prefer matching a label to one of these names when the conversation supports it, but still write 'unknown' if you cannot tell which one."
+            case .ukrainian:
+                candidateBlock = "\n\nВідомі учасники зустрічі: \(list). Спікери найімовірніше серед цих людей — за можливості співстав позначку саме з цими іменами, коли розмова це підтверджує; якщо однозначно визначити не вдається, все одно пиши 'unknown'."
+            }
+        }
+
+        return "\(intro)\n\(format)\n\(unknown)\(candidateBlock)\n\nLabels to identify:\n\(bullets)"
     }
 
     /// Parses lines like "Remote 1: Romek" / "Remote 2: unknown" produced by
