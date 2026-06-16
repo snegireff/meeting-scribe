@@ -17,9 +17,17 @@ final class LiveTranslator {
     /// 100 ms at 16 kHz.
     private static let chunkFrames = 1600
 
-    private let client: GeminiLiveClient
+    /// Touched only on `queue` (the buffer serial queue) so the capture-thread
+    /// feed and the reconnect swap never race on it.
+    private var client: GeminiLiveClient
     private let queue = DispatchQueue(label: "live.translate.buffer")
     private var pending: [Float] = []
+
+    // Reconnect state — all on the main queue (set in start/finish/handle).
+    private let apiKey: String
+    private var targetCode = "en"
+    private var stopped = false
+    private var reconnectAttempt = 0
 
     // Accumulated text for the in-progress turn.
     private var currentOriginal = ""
@@ -35,13 +43,43 @@ final class LiveTranslator {
     private(set) var captions: [LiveCaption] = []
 
     init(apiKey: String) {
+        self.apiKey = apiKey
         client = GeminiLiveClient(apiKey: apiKey)
         client.onEvent = { [weak self] event in self?.handle(event) }
     }
 
     func start(targetCode: String) {
+        self.targetCode = targetCode
+        stopped = false
+        reconnectAttempt = 0
         onStatus?(.connecting)
-        client.start(targetCode: targetCode)
+        queue.async { [weak self] in self?.client.start(targetCode: targetCode) }
+    }
+
+    /// Rebuild the socket after an unexpected close (Gemini Live caps session
+    /// length, so a long meeting will be kicked every few minutes) so subtitles
+    /// resume instead of freezing on the last line. Accumulated captions are
+    /// kept; only a brief gap of audio is lost during the swap. Called on main.
+    private func scheduleReconnect(_ error: String?) {
+        guard !stopped else { onStatus?(.closed(error)); return }
+        reconnectAttempt += 1
+        let delay = min(8.0, pow(2.0, Double(reconnectAttempt - 1))) // 1,2,4,8,8…
+        currentOriginal = ""
+        currentTranslated = ""
+        onStatus?(.connecting)
+        NSLog("LiveTranslator: reconnecting (#\(reconnectAttempt)) after close: \(error ?? "nil")")
+        let code = targetCode
+        let key = apiKey
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.queue.async { [weak self] in
+                guard let self else { return }
+                let fresh = GeminiLiveClient(apiKey: key)
+                fresh.onEvent = { [weak self] e in self?.handle(e) }
+                self.client = fresh
+                fresh.start(targetCode: code)
+            }
+        }
     }
 
     /// Feed 16 kHz mono float samples (called from the capture thread).
@@ -75,6 +113,7 @@ final class LiveTranslator {
     }
 
     func finish() {
+        stopped = true
         queue.async { [weak self] in
             guard let self else { return }
             if !self.pending.isEmpty {
@@ -90,6 +129,7 @@ final class LiveTranslator {
     private func handle(_ event: LiveEvent) {
         switch event {
         case .ready:
+            reconnectAttempt = 0
             onStatus?(.live)
         case .input(let text):
             currentOriginal += text
@@ -108,7 +148,9 @@ final class LiveTranslator {
             captions.append(LiveCaption(original: original, translated: translated))
             onUpdate?(captions, "")
         case .closed(let error):
-            onStatus?(.closed(error))
+            // Deliberate finish() → report closed; otherwise reconnect so the
+            // Gemini session limit doesn't freeze subtitles mid-meeting.
+            scheduleReconnect(error)
         }
     }
 
