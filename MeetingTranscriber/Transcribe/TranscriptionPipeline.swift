@@ -5,7 +5,7 @@ import OSLog
 /// (mic) and the optional system-audio stem. Each stem is transcribed
 /// independently so overlapping voices don't fight for Whisper's attention.
 final class TranscriptionPipeline {
-    private let whisper = WhisperEngine()
+    private let whisper = WhisperEngine.shared
     private let diarizer = DiarizationEngine()
 
     func run(voiceURL: URL,

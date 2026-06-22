@@ -5,7 +5,20 @@ import WhisperKit
 
 /// Thin wrapper around WhisperKit.
 actor WhisperEngine {
+    /// Shared engine for the whole app session. A loaded WhisperKit pipeline
+    /// (the ~600 MB model + its ANE-compiled artifacts) is cached here and
+    /// survives across jobs. Creating a fresh engine per transcription discards
+    /// this cache and forces a full reload + ANE compile every time (≈ minutes).
+    static let shared = WhisperEngine()
+
     private var pipelines: [WhisperModel: WhisperKit] = [:]
+
+    /// Load (and warm) a model ahead of time. Call when a recording starts so
+    /// the model is hot by the time the user stops and transcription begins,
+    /// turning the multi-minute cold load into an invisible background step.
+    func prewarm(model: WhisperModel) async {
+        _ = try? await pipeline(for: model)
+    }
 
     func transcribe(url: URL,
                     language: TranscriptionLanguage,

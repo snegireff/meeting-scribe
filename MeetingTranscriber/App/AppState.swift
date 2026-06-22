@@ -860,6 +860,12 @@ final class AppState {
             currentInputDeviceName = AudioRecorder.currentInputDeviceName()
             let start = Date()
             recordingState = .recording(startedAt: start, meeting: meeting, language: language)
+            // Warm the Whisper model in the background now, while the call is
+            // still running. The shared engine keeps it loaded, so by the time
+            // the user stops, transcription starts instantly instead of paying
+            // a multi-minute cold load + ANE compile after every recording.
+            let warmModel = selectedModel
+            Task.detached(priority: .utility) { await WhisperEngine.shared.prewarm(model: warmModel) }
             elapsedSeconds = 0
             startElapsedTimer(from: start)
             if let url = meeting?.url { dismissedMeetingURLs.insert(url) }
