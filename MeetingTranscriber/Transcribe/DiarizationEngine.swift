@@ -24,7 +24,8 @@ actor DiarizationEngine {
         return result.segments.map {
             DiarizedSegment(start: Double($0.startTimeSeconds),
                             end: Double($0.endTimeSeconds),
-                            speakerId: Self.intSpeakerID(from: $0.speakerId))
+                            speakerId: Self.intSpeakerID(from: $0.speakerId),
+                            embedding: $0.embedding)
         }
     }
 
@@ -39,4 +40,5 @@ struct DiarizedSegment: Hashable {
     let start: Double
     let end: Double
     let speakerId: Int
+    let embedding: [Float]
 }

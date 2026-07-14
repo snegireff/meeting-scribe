@@ -113,7 +113,8 @@ final class TranscriptionPipeline {
             speakers: merged.speakers,
             segments: merged.segments,
             audioFileName: voiceURL.lastPathComponent,
-            attendees: meeting?.attendees
+            attendees: meeting?.attendees,
+            speakerEmbeddings: merged.embeddings.isEmpty ? nil : merged.embeddings
         )
     }
 

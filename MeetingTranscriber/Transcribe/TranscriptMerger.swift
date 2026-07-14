@@ -10,7 +10,8 @@ enum TranscriptMerger {
     static func mergeStems(voice: [WhisperSegment],
                            system: [WhisperSegment],
                            systemDiarization: [DiarizedSegment]) -> (segments: [TranscriptSegment],
-                                                                     speakers: [SpeakerLabel]) {
+                                                                     speakers: [SpeakerLabel],
+                                                                     embeddings: [String: [Float]]) {
         // ---- Assign speaker ids ----
         //   1           → You (voice stem)
         //   2..N        → Remote 1..(N-1) (system stem, from diarization)
@@ -21,6 +22,7 @@ enum TranscriptMerger {
 
         var out: [TranscriptSegment] = []
         var speakers: [SpeakerLabel] = [SpeakerLabel(id: 1, name: "You")]
+        var embeddings: [String: [Float]] = [:]   // speakerId → averaged voice vector
 
         for seg in voice {
             out.append(TranscriptSegment(start: seg.start,
@@ -62,11 +64,26 @@ enum TranscriptMerger {
                     speakers.append(SpeakerLabel(id: id, name: "Remote \(offset + 1)"))
                 }
             }
+
+            // Average each remote speaker's diarization embeddings so a voice
+            // can be matched against / enrolled as a named profile later.
+            var rawEmbeddings: [Int: [[Float]]] = [:]
+            for d in systemDiarization where !d.embedding.isEmpty {
+                rawEmbeddings[d.speakerId, default: []].append(d.embedding)
+            }
+            var remoteToRaw: [Int: [Int]] = [:]
+            for (raw, remote) in remap { remoteToRaw[remote, default: []].append(raw) }
+            for (remote, raws) in remoteToRaw {
+                let vecs = raws.flatMap { rawEmbeddings[$0] ?? [] }
+                if let avg = SpeakerMatcher.average(vecs) {
+                    embeddings[String(remote)] = avg
+                }
+            }
         }
 
         // Interleave everything by start time.
         out.sort { $0.start < $1.start }
-        return (out, speakers)
+        return (out, speakers, embeddings)
     }
 
     // MARK: helpers

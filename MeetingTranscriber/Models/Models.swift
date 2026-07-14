@@ -123,6 +123,12 @@ struct TranscriptDocument: Codable, Identifiable, Hashable {
     // language default from Settings.
     var summaryModelOverride: LanguageModel?
 
+    /// Averaged 256-dim voice embedding per speaker id (key = "\(speakerId)"),
+    /// captured from diarization. Enables voice enrollment: match a speaker
+    /// against remembered profiles, and enroll a speaker from a saved transcript
+    /// after the fact. Optional so transcripts saved before this field decode.
+    var speakerEmbeddings: [String: [Float]]? = nil
+
     enum SourceKind: String, Codable {
         case live
         case imported

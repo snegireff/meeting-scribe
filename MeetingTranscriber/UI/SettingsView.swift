@@ -61,6 +61,42 @@ private struct GeneralSettingsView: View {
                     .buttonStyle(.link)
                 }
             }
+            Section {
+                SecureField("Telegram bot token", text: $state.telegramBotToken)
+                    .textContentType(.password)
+                TextField("Telegram chat ID", text: $state.telegramChatID)
+                TextField("Obsidian vault path", text: $state.obsidianVaultPath)
+            } header: {
+                Text("Send summaries")
+            } footer: {
+                Text("Optional destinations for the “Send…” button on a summary. Telegram uses a bot you create with @BotFather; the token is stored in your Keychain. Obsidian writes a note under “Meeting Summaries/” in the vault. Leave empty to disable.")
+            }
+            Section {
+                if state.enrolledSpeakers.isEmpty {
+                    Text("No remembered voices yet. In a transcript, tap a speaker → “Remember this voice”.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(state.enrolledSpeakers) { profile in
+                        HStack {
+                            Image(systemName: "waveform.circle.fill")
+                                .foregroundStyle(.secondary)
+                            Text(profile.name)
+                            Spacer()
+                            Button(role: .destructive) {
+                                state.removeEnrolledSpeaker(id: profile.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+            } header: {
+                Text("Remembered voices")
+            } footer: {
+                Text("Enrolled voices are matched automatically in new meetings so a known speaker is labelled by name instead of “Remote”.")
+            }
         }
         .formStyle(.grouped)
     }

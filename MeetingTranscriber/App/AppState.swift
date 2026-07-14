@@ -77,6 +77,39 @@ final class AppState {
         didSet { UserDefaults.standard.set(liveTargetLanguage.rawValue, forKey: "liveTargetLanguage") }
     }
 
+    // MARK: – Summary export destinations (all opt-in; empty = disabled)
+    static let kTelegramToken = "telegram-bot-token"
+    var telegramBotToken: String = "" {
+        didSet {
+            guard !isLoadingTelegramToken else { return }   // skip persist on async load-in
+            KeychainStore.set(telegramBotToken, for: Self.kTelegramToken)
+        }
+    }
+    @ObservationIgnored private var isLoadingTelegramToken = false
+    var telegramChatID: String = UserDefaults.standard.string(forKey: "telegramChatID") ?? "" {
+        didSet { UserDefaults.standard.set(telegramChatID, forKey: "telegramChatID") }
+    }
+    var obsidianVaultPath: String = UserDefaults.standard.string(forKey: "obsidianVaultPath") ?? "" {
+        didSet { UserDefaults.standard.set(obsidianVaultPath, forKey: "obsidianVaultPath") }
+    }
+
+    /// Load the Telegram bot token from the Keychain off-main, mirroring the
+    /// Gemini key pattern so a hanging `securityd` round-trip can't stall launch.
+    func loadTelegramTokenFromKeychain() {
+        Task { [weak self] in
+            let token = await Task.detached(priority: .utility) {
+                KeychainStore.string(for: AppState.kTelegramToken) ?? ""
+            }.value
+            guard let self, self.telegramBotToken.isEmpty, !token.isEmpty else { return }
+            self.isLoadingTelegramToken = true
+            self.telegramBotToken = token
+            self.isLoadingTelegramToken = false
+        }
+    }
+
+    // MARK: – Voice enrollment (remembered voice profiles)
+    var enrolledSpeakers: [EnrolledSpeaker] = EnrolledSpeakersStore.load()
+
     /// Live session state, updated while recording with translation on.
     var liveCaptions: [LiveCaption] = []
     var liveInProgress: String = ""
@@ -677,6 +710,7 @@ final class AppState {
         didBootstrap = true
         NSLog("MT: bootstrap() entered")
         loadGeminiKeyFromKeychain()
+        loadTelegramTokenFromKeychain()
         startBackgroundServices()
         await loadTranscripts()
         recoverOrphanedRecordings()
@@ -1177,7 +1211,7 @@ final class AppState {
             }
             let prime = languagePrimes[language.rawValue] ?? ""
             let model = job.modelOverride ?? selectedModel
-            let freshDoc = try await pipeline.run(voiceURL: voiceURL,
+            var freshDoc = try await pipeline.run(voiceURL: voiceURL,
                                                   systemURL: systemURL,
                                                   duration: duration,
                                                   language: language,
@@ -1188,6 +1222,9 @@ final class AppState {
                                                   initialPrompt: prime.isEmpty ? nil : prime,
                                                   wordReplacements: wordReplacements,
                                                   progress: progress)
+
+            // Auto-label placeholder "Remote N" speakers with remembered voices.
+            SpeakerMatcher.autoLabel(&freshDoc, enrolled: enrolledSpeakers)
 
             // For re-transcription, preserve the existing document's identity
             // (id, title, date, audio filename, source) and overlay the fresh
@@ -1275,5 +1312,37 @@ final class AppState {
               let sIdx = transcripts[tIdx].speakers.firstIndex(where: { $0.id == speakerID }) else { return }
         transcripts[tIdx].speakers[sIdx].name = trimmed
         try? TranscriptStore.shared.save(transcripts[tIdx], audioSource: nil)
+    }
+
+    // MARK: – Voice enrollment actions
+
+    /// Whether a speaker in the given transcript has a stored voice embedding
+    /// (i.e. can be enrolled as a remembered profile).
+    func canEnrollSpeaker(transcriptID: String, speakerID: Int) -> Bool {
+        guard let doc = transcripts.first(where: { $0.id == transcriptID }) else { return false }
+        return doc.speakerEmbeddings?[String(speakerID)]?.isEmpty == false
+    }
+
+    /// Remember a speaker's voice as a named profile so future meetings auto-label
+    /// the same voice. Reuses the averaged embedding stored on the transcript and
+    /// also renames the speaker here. A same-name profile is replaced.
+    func enrollSpeaker(transcriptID: String, speakerID: Int, name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let doc = transcripts.first(where: { $0.id == transcriptID }),
+              let emb = doc.speakerEmbeddings?[String(speakerID)], !emb.isEmpty else { return }
+        let profile = EnrolledSpeaker(name: trimmed, embedding: emb)
+        if let i = enrolledSpeakers.firstIndex(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            enrolledSpeakers[i] = profile
+        } else {
+            enrolledSpeakers.append(profile)
+        }
+        EnrolledSpeakersStore.save(enrolledSpeakers)
+        renameSpeaker(transcriptID: transcriptID, speakerID: speakerID, to: trimmed)
+    }
+
+    func removeEnrolledSpeaker(id: UUID) {
+        enrolledSpeakers.removeAll { $0.id == id }
+        EnrolledSpeakersStore.save(enrolledSpeakers)
     }
 }

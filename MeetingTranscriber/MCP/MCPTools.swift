@@ -1,10 +1,10 @@
 import Foundation
 import MCP
 
-/// Tool catalog and dispatcher for the local MCP server. Exposes three
+/// Tool catalog and dispatcher for the local MCP server. Exposes four
 /// read-only tools backed by `TranscriptStore` so an external MCP client
-/// (Claude Code, etc.) can browse transcripts without touching the app's
-/// internal state.
+/// (Claude Code, etc.) can browse and search transcripts without touching
+/// the app's internal state.
 enum MCPTools {
 
     // MARK: - Definitions
@@ -62,6 +62,38 @@ enum MCPTools {
                 "required": .array([.string("id")])
             ]),
             annotations: Tool.Annotations(readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false)
+        ),
+        Tool(
+            name: "search_transcripts",
+            description: """
+                Full-text search across every stored transcript. Matches the \
+                query (case-insensitive) against transcript titles and every \
+                spoken segment, returning a JSON array (newest-first) of \
+                matching transcripts — each with id, title, ISO-8601 date, \
+                whether the title matched, and up to `maxHitsPerTranscript` \
+                matched segments (time in seconds, speaker, text). Use this to \
+                answer questions like "what did we decide about X?" across all \
+                meetings, then `get_transcript` to read one in full.
+                """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "query": .object([
+                        "type": .string("string"),
+                        "description": .string("Search text. Matched case-insensitively against titles and segment text.")
+                    ]),
+                    "limit": .object([
+                        "type": .string("integer"),
+                        "description": .string("Max transcripts to return (default 20).")
+                    ]),
+                    "maxHitsPerTranscript": .object([
+                        "type": .string("integer"),
+                        "description": .string("Max matched segments to include per transcript (default 5).")
+                    ])
+                ]),
+                "required": .array([.string("query")])
+            ]),
+            annotations: Tool.Annotations(readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false)
         )
     ]
 
@@ -75,6 +107,12 @@ enum MCPTools {
             return getTranscript(id: arguments?["id"]?.stringValue)
         case "get_summary":
             return getSummary(id: arguments?["id"]?.stringValue)
+        case "search_transcripts":
+            return searchTranscripts(
+                query: arguments?["query"]?.stringValue,
+                limit: arguments?["limit"]?.intValue,
+                maxHitsPerTranscript: arguments?["maxHitsPerTranscript"]?.intValue
+            )
         default:
             return errorResult("Unknown tool: \(name)")
         }
@@ -152,6 +190,62 @@ enum MCPTools {
             rendered += "_\n"
         }
         return CallTool.Result(content: [.text(text: rendered, annotations: nil, _meta: nil)], isError: false)
+    }
+
+    /// Full-text search over titles + segment text across all transcripts.
+    /// Keyword (case-insensitive `contains`) — deliberately not embeddings:
+    /// for a personal archive of <100 meetings this is instant and needs no
+    /// model. Returns matched transcripts with their matched segments.
+    private static func searchTranscripts(query: String?, limit: Int?, maxHitsPerTranscript: Int?) -> CallTool.Result {
+        guard let query = query?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty else {
+            return errorResult("Missing required argument: query")
+        }
+        let docs: [TranscriptDocument]
+        do {
+            docs = try TranscriptStore.shared.loadAll()
+        } catch {
+            return errorResult("Failed to read transcripts: \(error.localizedDescription)")
+        }
+
+        let needle = query.lowercased()
+        let maxDocs = max(1, limit ?? 20)
+        let maxHits = max(1, maxHitsPerTranscript ?? 5)
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+
+        var results: [[String: Any]] = []
+        for doc in docs.sorted(by: { $0.date > $1.date }) {
+            let titleHit = doc.title.lowercased().contains(needle)
+            var hits: [[String: Any]] = []
+            for seg in doc.segments where seg.text.lowercased().contains(needle) {
+                let name = doc.speakers.first(where: { $0.id == seg.speakerId })?.name ?? "Speaker"
+                hits.append([
+                    "time": Int(seg.start.rounded()),
+                    "speaker": name,
+                    "text": seg.text
+                ])
+                if hits.count >= maxHits { break }
+            }
+            guard titleHit || !hits.isEmpty else { continue }
+            results.append([
+                "id": doc.id,
+                "title": doc.title,
+                "date": iso.string(from: doc.date),
+                "titleMatch": titleHit,
+                "matchedSegments": hits
+            ])
+            if results.count >= maxDocs { break }
+        }
+
+        if results.isEmpty {
+            return CallTool.Result(content: [.text(text: "No transcripts matched \"\(query)\".", annotations: nil, _meta: nil)], isError: false)
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted]),
+              let text = String(data: data, encoding: .utf8) else {
+            return errorResult("Failed to encode search results.")
+        }
+        return CallTool.Result(content: [.text(text: text, annotations: nil, _meta: nil)], isError: false)
     }
 
     // MARK: - Helpers

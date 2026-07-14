@@ -11,6 +11,7 @@ struct TranscriptDetailView: View {
     @State private var titleDraft: String = ""
     @State private var justCopied: Bool = false
     @State private var summaryJustCopied: Bool = false
+    @State private var summarySent: Bool = false
     @State private var audioPlayer = TranscriptAudioPlayer()
     @State private var showingCustomPromptPopover: Bool = false
     @State private var customSummaryPrompt: String = ""
@@ -194,6 +195,21 @@ struct TranscriptDetailView: View {
                         .buttonStyle(.plain)
                     }
                 }
+            }
+
+            if appState.canEnrollSpeaker(transcriptID: documentID, speakerID: sp.id) {
+                Divider()
+                Button {
+                    appState.enrollSpeaker(transcriptID: documentID,
+                                           speakerID: sp.id,
+                                           name: newSpeakerNameDraft)
+                    renamingSpeakerID = nil
+                } label: {
+                    Label("Remember this voice", systemImage: "waveform.badge.plus")
+                }
+                .buttonStyle(.plain)
+                .disabled(newSpeakerNameDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help("Save this voice so future meetings label it with this name automatically")
             }
 
             HStack {
@@ -573,6 +589,10 @@ struct TranscriptDetailView: View {
                     .controlSize(.small)
                     .sensoryFeedback(.success, trigger: summaryJustCopied) { _, new in new }
                     .help("Copy summary as Markdown")
+
+                    if doc.summary?.isEmpty == false {
+                        sendSummaryMenu(for: doc)
+                    }
                 }
 
                 if let summary = doc.summary, !summary.isEmpty {
@@ -598,6 +618,63 @@ struct TranscriptDetailView: View {
             try? await Task.sleep(for: .milliseconds(1400))
             withAnimation(.snappy) { summaryJustCopied = false }
         }
+    }
+
+    // MARK: – Send summary (Telegram / Obsidian / Email)
+    @ViewBuilder
+    private func sendSummaryMenu(for doc: TranscriptDocument) -> some View {
+        Menu {
+            Button {
+                Task { await sendSummaryToTelegram(doc) }
+            } label: { Label("Telegram", systemImage: "paperplane") }
+            Button {
+                sendSummaryToObsidian(doc)
+            } label: { Label("Obsidian note", systemImage: "doc.text") }
+            Button {
+                do { try ExportCoordinator.openEmailDraft(doc) }
+                catch { appState.lastError = errorText(error) }
+            } label: { Label("Email draft", systemImage: "envelope") }
+        } label: {
+            Label(summarySent ? "Sent!" : "Send…",
+                  systemImage: summarySent ? "checkmark.circle.fill" : "paperplane")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.glass)
+        .controlSize(.small)
+        .sensoryFeedback(.success, trigger: summarySent) { _, new in new }
+        .help("Send this summary to Telegram, Obsidian, or an email draft")
+    }
+
+    private func sendSummaryToTelegram(_ doc: TranscriptDocument) async {
+        do {
+            try await ExportCoordinator.sendToTelegram(doc,
+                                                       token: appState.telegramBotToken,
+                                                       chatID: appState.telegramChatID)
+            flashSummarySent()
+        } catch {
+            appState.lastError = errorText(error)
+        }
+    }
+
+    private func sendSummaryToObsidian(_ doc: TranscriptDocument) {
+        do {
+            _ = try ExportCoordinator.writeToObsidian(doc, vaultPath: appState.obsidianVaultPath)
+            flashSummarySent()
+        } catch {
+            appState.lastError = errorText(error)
+        }
+    }
+
+    private func flashSummarySent() {
+        withAnimation(.snappy) { summarySent = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1600))
+            withAnimation(.snappy) { summarySent = false }
+        }
+    }
+
+    private func errorText(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     @ViewBuilder
