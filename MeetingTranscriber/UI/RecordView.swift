@@ -30,20 +30,14 @@ struct RecordView: View {
     }
 
     // MARK: – Header
+    // Engine + Whisper-model choice lives in Settings (single source of truth);
+    // no per-recording picker here — it only duplicated Settings and was
+    // misleading under Parakeet, where the Whisper model is ignored.
     private var header: some View {
-        @Bindable var state = appState
-        return HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .firstTextBaseline) {
             Text("Record")
                 .font(Theme.titleFont)
             Spacer()
-            Picker("Model", selection: $state.selectedModel) {
-                ForEach(WhisperModel.allCases) { m in
-                    Text(m.displayName).tag(m)
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(maxWidth: 260)
-            .disabled(state.recordingState.isBusy)
         }
     }
 
