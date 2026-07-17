@@ -28,15 +28,26 @@ private struct GeneralSettingsView: View {
 
         Form {
             Section("Transcription") {
-                Picker("Model", selection: $state.selectedModel) {
-                    ForEach(WhisperModel.allCases) { m in
-                        Text(m.displayName).tag(m)
+                Picker("Engine", selection: $state.transcriptionEnginePreference) {
+                    ForEach(TranscriptionEnginePreference.allCases) { p in
+                        Text(p.displayName).tag(p)
+                    }
+                }
+                if state.transcriptionEnginePreference != .parakeet {
+                    Picker("Model", selection: $state.selectedModel) {
+                        ForEach(WhisperModel.allCases) { m in
+                            Text(m.displayName).tag(m)
+                        }
                     }
                 }
                 Picker("Default language", selection: $state.defaultLanguage) {
                     ForEach(TranscriptionLanguage.allCases) { l in
                         Text("\(l.flag) \(l.displayName)").tag(l)
                     }
+                }
+                if state.transcriptionEnginePreference != .whisper {
+                    Text("Parakeet TDT v3 runs fully on-device (CoreML/ANE), auto-detects language, and is stronger on Ukrainian than Whisper. First use downloads the model (~600 MB).")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             Section("Capture") {

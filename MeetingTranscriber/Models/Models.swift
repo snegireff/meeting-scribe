@@ -51,6 +51,50 @@ enum WhisperModel: String, CaseIterable, Codable, Identifiable, Hashable {
     }
 }
 
+/// Which speech-to-text engine transcribes a recording.
+/// - `whisper`: WhisperKit / Whisper large-v3 (default; per-language model picker).
+/// - `parakeet`: FluidAudio's Parakeet TDT v3 — multilingual CoreML, faster,
+///   and stronger on Ukrainian. Ignores the WhisperModel picker.
+enum TranscriptionEngine: String, CaseIterable, Codable, Identifiable, Hashable {
+    case whisper
+    case parakeet
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .whisper:  return "Whisper (large-v3)"
+        case .parakeet: return "Parakeet v3 (multilingual, faster)"
+        }
+    }
+}
+
+/// User-facing engine choice. `auto` picks per language — Parakeet for Ukrainian
+/// (lower WER, no silence hallucinations), Whisper for English (its blank-fix
+/// `melChunkContext` helps long English). The other two force a specific engine.
+enum TranscriptionEnginePreference: String, CaseIterable, Codable, Identifiable, Hashable {
+    case auto
+    case whisper
+    case parakeet
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .auto:     return "Auto (Parakeet for Ukrainian, Whisper for English)"
+        case .whisper:  return "Whisper (large-v3)"
+        case .parakeet: return "Parakeet v3 (multilingual, faster)"
+        }
+    }
+
+    /// Resolve to the concrete engine for a given language.
+    func engine(for language: TranscriptionLanguage) -> TranscriptionEngine {
+        switch self {
+        case .whisper:  return .whisper
+        case .parakeet: return .parakeet
+        case .auto:     return language == .ukrainian ? .parakeet : .whisper
+        }
+    }
+}
+
 struct DetectedMeeting: Equatable, Hashable, Identifiable {
     let id: UUID = UUID()
     let title: String

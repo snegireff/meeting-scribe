@@ -30,6 +30,19 @@ final class AppState {
     }
     var captureSystemAudio: Bool = true
 
+    /// Speech-to-text engine preference. Persisted so the choice sticks across
+    /// launches. Default `auto` = Parakeet for Ukrainian, Whisper for English.
+    var transcriptionEnginePreference: TranscriptionEnginePreference = {
+        if let raw = UserDefaults.standard.string(forKey: "transcriptionEnginePreference"),
+           let p = TranscriptionEnginePreference(rawValue: raw) { return p }
+        return .auto
+    }() {
+        didSet {
+            UserDefaults.standard.set(transcriptionEnginePreference.rawValue,
+                                      forKey: "transcriptionEnginePreference")
+        }
+    }
+
     // MARK: – Live translation (Gemini Live API)
     private static let kGeminiKey = "gemini-api-key"
 
@@ -1216,6 +1229,7 @@ final class AppState {
                                                   duration: duration,
                                                   language: language,
                                                   model: model,
+                                                  engine: transcriptionEnginePreference.engine(for: language),
                                                   meeting: meeting,
                                                   sourceKind: sourceKind,
                                                   importedFileName: importedName,

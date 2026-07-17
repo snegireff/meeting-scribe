@@ -6,13 +6,33 @@ import OSLog
 /// independently so overlapping voices don't fight for Whisper's attention.
 final class TranscriptionPipeline {
     private let whisper = WhisperEngine.shared
+    private let parakeet = ParakeetEngine.shared
     private let diarizer = DiarizationEngine()
+
+    /// Transcribe one stem with the selected engine. Parakeet ignores the
+    /// WhisperModel and the (currently disabled) initial prompt; both engines
+    /// return the same `[WhisperSegment]` shape so the merge stage is unchanged.
+    private func transcribeStem(url: URL,
+                                language: TranscriptionLanguage,
+                                model: WhisperModel,
+                                engine: TranscriptionEngine,
+                                initialPrompt: String?,
+                                progress: @escaping (Double, String) -> Void) async throws -> [WhisperSegment] {
+        switch engine {
+        case .whisper:
+            return try await whisper.transcribe(url: url, language: language, model: model,
+                                                initialPrompt: initialPrompt, progress: progress)
+        case .parakeet:
+            return try await parakeet.transcribe(url: url, language: language, progress: progress)
+        }
+    }
 
     func run(voiceURL: URL,
              systemURL: URL?,
              duration: TimeInterval,
              language: TranscriptionLanguage,
              model: WhisperModel,
+             engine: TranscriptionEngine,
              meeting: DetectedMeeting?,
              sourceKind: TranscriptDocument.SourceKind,
              importedFileName: String?,
@@ -26,10 +46,11 @@ final class TranscriptionPipeline {
         progress(0.05, "Transcribing your voice")
         let voiceSegs: [WhisperSegment]
         do {
-            voiceSegs = try await whisper.transcribe(
+            voiceSegs = try await transcribeStem(
                 url: voiceURL,
                 language: language,
                 model: model,
+                engine: engine,
                 initialPrompt: initialPrompt,
                 progress: { p, s in progress(0.05 + p * 0.30, s) }
             )
@@ -45,10 +66,11 @@ final class TranscriptionPipeline {
         if let systemURL = systemURL {
             progress(0.40, "Transcribing system audio")
             do {
-                systemSegs = try await whisper.transcribe(
+                systemSegs = try await transcribeStem(
                     url: systemURL,
                     language: language,
                     model: model,
+                    engine: engine,
                     initialPrompt: initialPrompt,
                     progress: { p, s in progress(0.40 + p * 0.30, s) }
                 )
